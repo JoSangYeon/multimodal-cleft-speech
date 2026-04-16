@@ -60,7 +60,7 @@ Trained model weights are available at the following link:
 | Audio + VFS | [Link]() |
 | Audio + Video + Tabular | [Link]() |
 | Audio + Video + VFS | [Link]() |
-| Full Modality (A+V+VFS+T) | [Link]() |
+| Full Modality (A+V+VFS+T) | [Link](https://drive.google.com/drive/folders/1P6pJnJNE3RGkYUvYjTSzUo9vH7i7Of7d?usp=sharing) |
 
 ## Usage
 
