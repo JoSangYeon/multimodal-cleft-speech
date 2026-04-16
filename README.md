@@ -108,7 +108,7 @@ CUDA_VISIBLE_DEVICES=0 python ablation.py \
 
 ## Data Availability
 
-Patient data (audio recordings, facial video, and VFS imaging) are not publicly available due to privacy and ethical considerations, as they contain identifiable facial information. Access may be granted upon reasonable request and with appropriate institutional approval.
+Patient data (audio recordings, facial video, and VFS imaging) are not publicly available due to privacy and ethical considerations, as they contain identifiable facial information.
 
 ## Citation
 
