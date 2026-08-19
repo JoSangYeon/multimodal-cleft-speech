@@ -11,6 +11,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from dataset import resolve_dsr
+
 from sklearn.metrics import (roc_auc_score, 
                              average_precision_score,
                              accuracy_score,  
@@ -59,7 +61,7 @@ def train(args, device, model, optimizer, criterion, train_loader, accum_step=1)
             "audio_input_values": audio_inputs.to(device),
             "audio_attention_mask": attention_mask.to(device),
             "video_x": video_clip_embed.to(device),
-            "dsr_x": dsr_embed.to(device),
+            "dsr_x": resolve_dsr(dsr_embed, device),
             "cate_tabular": cate_tabular.to(device),
             "nume_tabular": nume_tabular.to(device),
         }
@@ -121,7 +123,7 @@ def evaluate(args, device, model, criterion, data_loader, is_inference=False):
                 "audio_input_values": audio_inputs.to(device),
                 "audio_attention_mask": attention_mask.to(device),
                 "video_x": video_clip_embed.to(device),
-                "dsr_x": dsr_embed.to(device),
+                "dsr_x": resolve_dsr(dsr_embed, device),
                 "cate_tabular": cate_tabular.to(device),
                 "nume_tabular": nume_tabular.to(device),
             }

@@ -1,0 +1,68 @@
+cff-version: 1.2.0
+message: >-
+  If you use this software, please cite it using the metadata below.
+  The corresponding journal article will be added once published.
+title: >-
+  Multimodal Deep Learning for Detection of Compensatory Articulation and
+  Hypernasality in Patients with Cleft Palate — analysis code
+abstract: >-
+  Analysis pipeline for a multimodal machine learning model integrating speech
+  audio, facial video, videofluoroscopic (VFS) imaging, and clinical variables
+  for the detection of compensatory articulation and hypernasality in patients
+  with repaired cleft palate. Includes leave-one-patient-out cross-validation,
+  patient-level cluster bootstrap confidence intervals, and paired bootstrap
+  comparisons between modality configurations.
+type: software
+version: 1.0.0
+date-released: "2026-08-19"
+repository-code: "https://github.com/JoSangYeon/multimodal-cleft-speech"
+keywords:
+  - cleft palate
+  - speech assessment
+  - compensatory articulation
+  - hypernasality
+  - multimodal learning
+  - videofluoroscopy
+authors:
+  - given-names: Youngsoo
+    family-names: Yoon
+    affiliation: >-
+      Department of Plastic and Reconstructive Surgery, Seoul National
+      University Hospital, Seoul National University College of Medicine
+  - given-names: Yonjoon
+    family-names: Chun
+    affiliation: >-
+      Department of Plastic and Reconstructive Surgery, Seoul National
+      University Hospital, Seoul National University College of Medicine
+  - given-names: Young-Hye
+    family-names: Hong
+    affiliation: >-
+      Speech-Language and Hearing Center, Seoul National University Hospital
+  - given-names: Sangyeon
+    family-names: Cho
+    affiliation: "MDB Inc., Seoul, Republic of Korea"
+  - given-names: Chae-Yeon
+    family-names: Jang
+    affiliation: "Seoul National University College of Medicine"
+  - given-names: Haeni
+    family-names: Lee
+    affiliation: >-
+      Department of Plastic and Reconstructive Surgery, Seoul National
+      University Hospital, Seoul National University College of Medicine
+  - given-names: Jee Hyeok
+    family-names: Chung
+    affiliation: >-
+      Division of Pediatric Plastic Surgery, Seoul National University
+      Children's Hospital, Seoul National University College of Medicine
+  - given-names: Seung-Hak
+    family-names: Baek
+    orcid: "https://orcid.org/0000-0002-6586-9503"
+    affiliation: >-
+      Department of Orthodontics, School of Dentistry, Seoul National University
+  - given-names: Sungmi
+    family-names: Jeon
+    orcid: "https://orcid.org/0000-0001-9823-0469"
+    email: jsmjsm418@snu.ac.kr
+    affiliation: >-
+      Division of Pediatric Plastic Surgery, Seoul National University
+      Children's Hospital, Seoul National University College of Medicine

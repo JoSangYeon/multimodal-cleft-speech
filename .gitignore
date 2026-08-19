@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# Data (not distributed; see Data Availability)
+/_DATA/
+
+# Experiment outputs
+/RESULT/
+/RESULT_LOPO_V2/
+/MODEL/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/

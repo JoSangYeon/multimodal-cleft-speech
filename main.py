@@ -1,5 +1,6 @@
 import os
 import math
+import time
 import argparse
 from platform import processor
 import numpy as np
@@ -84,16 +85,45 @@ def main(args):
     ### Dataset Settings
     data_path = os.path.join("_DATA", "DATA_video_clip_npy_audio_clip_tabular.jsonl")
     data = load_jsonl(data_path)
-    N_FOLDS = args.n_folds
-    folds = get_patient_kfold_splits(data, n_splits=N_FOLDS, SEED=SEED)
+    if args.cv_scheme == 'lopo':
+        folds = get_lopo_splits(data)
+    elif args.cv_scheme == 'mccv':
+        folds = get_montecarlo_splits(data, n_splits=args.n_splits,
+                                      test_size=args.test_size, SEED=SEED)
+    else:
+        folds = get_patient_kfold_splits(data, n_splits=args.n_folds, SEED=SEED)
+    if args.max_folds is not None:
+        folds = folds[:args.max_folds]
+        print(f"[max_folds] 앞 {args.max_folds}개 fold만 실행 — 집계 결과는 불완전함")
+    N_FOLDS = len(folds)
+    print(f"CV scheme: {args.cv_scheme} | {N_FOLDS} folds")
 
+    # VFS 임베딩은 환자 단위 파일(35개)을 1,254개 샘플이 공유하므로 미리 캐시한다.
+    # DataLoader 워커가 fork되기 전(=여기)에 채워야 copy-on-write로 공유된다.
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    if is_dsr_active:
+        preload_dsr_cache(data, DSR_K)
+        if args.dsr_gpu_cache and device.type == 'cuda':
+            build_dsr_gpu_cache(device)
+
     ### K-Fold Cross Validation
+    fold_elapsed = []
     for fold_idx, (train_data, valid_data) in enumerate(folds):
+        fold_t0 = time.time()
         print(f"\n{'='*60}")
         print(f"=== Fold {fold_idx + 1} / {N_FOLDS} ===")
         print(f"{'='*60}")
+
+        fold_dir = os.path.join(SAVE_DIR, f'fold_{fold_idx}')
+        # 34-fold LOPO는 중단/재개가 잦으므로 완료된 fold는 건너뛴다.
+        # fold별로 재시딩하므로 재개해도 결과가 연속 실행과 동일하다.
+        if all(os.path.exists(os.path.join(fold_dir, f"inference_results_{ln}.csv"))
+               for ln in ["보상조음", "과다비성"]):
+            print(f"  이미 완료됨 — 건너뜀")
+            continue
+        make_dirs(fold_dir)
+        set_SEED(SEED + fold_idx)
 
         train_df = pd.DataFrame(train_data)
         valid_df = pd.DataFrame(valid_data)
@@ -102,11 +132,11 @@ def main(args):
         print(f"Valid: {len(valid_data)} samples, {valid_df['pid'].nunique()} patients | "
               f"보상조음 {valid_df['보상조음'].mean():.4f} | 과다비성 {valid_df['과다비성'].mean():.4f}")
 
-        fold_dir = os.path.join(SAVE_DIR, f'fold_{fold_idx}')
-        make_dirs(fold_dir)
-
-        train_dataset = Mydataset(train_data, processor, DSR_K)
-        valid_dataset = Mydataset(valid_data, processor, DSR_K)
+        # dbg_load_all: 데이터로더 최적화가 수치에 영향을 주지 않는지 검증하기 위한 플래그.
+        # 모델의 active_modality는 그대로 두고 로딩만 예전처럼 전부 수행한다.
+        ds_modality = None if args.dbg_load_all else active_modality
+        train_dataset = Mydataset(train_data, processor, DSR_K, ds_modality)
+        valid_dataset = Mydataset(valid_data, processor, DSR_K, ds_modality)
 
         train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
         valid_loader = DataLoader(valid_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
@@ -141,8 +171,20 @@ def main(args):
             tab_dropout=tab_dropout,
         ); model.to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-3)
-        pos_weight = torch.tensor([20.28, 14.67], dtype=torch.float32).to(device)
-        criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+
+        # pos_weight는 반드시 해당 fold의 '학습셋'에서 계산해야 한다.
+        # 전역값을 고정 사용하면 (a) 전체 클래스 비율이 학습에 누출되고,
+        # (b) 양성 환자를 hold-out한 fold에서 positive가 최대 2배 과소가중되어
+        #     그 fold의 예측이 체계적으로 낮아진다(관측된 스케일 드리프트의 원인).
+        if args.pos_weight_mode == 'global':
+            pos_weight = torch.tensor([20.28, 14.67], dtype=torch.float32)
+        else:
+            n_pos = train_df[["보상조음", "과다비성"]].values.sum(axis=0)
+            n_neg = len(train_df) - n_pos
+            pos_weight = torch.tensor(n_neg / np.maximum(n_pos, 1), dtype=torch.float32)
+        print(f"  pos_weight ({args.pos_weight_mode}): "
+              f"보상조음 {pos_weight[0]:.2f}, 과다비성 {pos_weight[1]:.2f}")
+        criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight.to(device))
 
         ### Training & Validation Loop
         train_history_list = []
@@ -167,34 +209,62 @@ def main(args):
         pd.DataFrame(valid_history_list).to_csv(
             os.path.join(fold_dir, "valid_history.csv"), index=False, encoding='utf-8-sig')
 
+        ### Save Model Weights
+        # LOPO는 fold가 34개라 체크포인트가 ~88GB에 달하고, 평가에는 OOF 예측만
+        # 필요하므로 기본적으로 저장하지 않는다.
+        if args.save_model:
+            MODEL_DIR = os.path.join("MODEL", args.save_dir, f"fold_{fold_idx}")
+            make_dirs(MODEL_DIR)
+            model_path = os.path.join(MODEL_DIR, "model.pt")
+            torch.save(model.state_dict(), model_path)
+            print(f"  Model saved: {model_path}")
+
         ### Inference
         print(f"\n=== Fold {fold_idx + 1} Inference ===")
         (inference_history, (predicted_probas_0, predicted_labels_0, labels_0,
                              predicted_probas_1, predicted_labels_1, labels_1)) = evaluate(
             args, device, model, criterion, valid_loader, is_inference=True)
 
+        # valid_loader는 shuffle=False이므로 예측 순서가 valid_data 순서와 일치한다.
+        # 환자 단위 cluster bootstrap을 위해 pid/word를 함께 저장.
         for label_name, pp, pl, lb in [
             ("보상조음", predicted_probas_0, predicted_labels_0, labels_0),
             ("과다비성", predicted_probas_1, predicted_labels_1, labels_1),
         ]:
+            assert len(pp) == len(valid_df), \
+                f"예측 {len(pp)}개 != 검증 샘플 {len(valid_df)}개 (fold {fold_idx})"
             pd.DataFrame({
+                "pid": valid_df["pid"].values,
+                "word": valid_df["word"].values,
                 "predicted_probas": pp.tolist(),
                 "predicted_labels": pl.tolist(),
                 "label": lb.tolist(),
             }).to_csv(os.path.join(fold_dir, f"inference_results_{label_name}.csv"),
                       index=False, encoding='utf-8-sig')
 
+        dt = time.time() - fold_t0
+        fold_elapsed.append(dt)
+        remain = (N_FOLDS - fold_idx - 1) * np.mean(fold_elapsed)
+        print(f"  Fold {fold_idx + 1} 소요 {dt/60:.1f}분 | "
+              f"평균 {np.mean(fold_elapsed)/60:.1f}분 | 남은 예상 {remain/3600:.1f}시간")
+
     ### Aggregate all fold results
     print(f"\n{'='*60}")
     print(f"=== Aggregating {N_FOLDS} Folds ===")
+    print(f"총 소요 {np.sum(fold_elapsed)/3600:.2f}시간 (fold당 평균 {np.mean(fold_elapsed)/60:.1f}분)")
     print(f"{'='*60}")
     for label_name in ["보상조음", "과다비성"]:
-        all_dfs = []
+        all_dfs, missing = [], []
         for fi in range(N_FOLDS):
             fold_path = os.path.join(SAVE_DIR, f'fold_{fi}', f'inference_results_{label_name}.csv')
+            if not os.path.exists(fold_path):
+                missing.append(fi)
+                continue
             fold_df = pd.read_csv(fold_path)
             fold_df['fold'] = fi
             all_dfs.append(fold_df)
+        if missing:
+            print(f"  [경고] {label_name}: fold {missing} 누락 — 집계 결과가 불완전합니다")
         aggregated = pd.concat(all_dfs, ignore_index=True)
         agg_path = os.path.join(SAVE_DIR, f"inference_results_{label_name}.csv")
         aggregated.to_csv(agg_path, index=False, encoding='utf-8-sig')
@@ -210,7 +280,17 @@ def parse_args():
     parser.add_argument('--save_root', type=str, default='./RESULT', help="Path to results root directory")
     parser.add_argument('--save_dir', type=str, default='./baseline_save', help="Directory to save model checkpoints and logs")
 
-    parser.add_argument('--n_folds', type=int, default=5, help="Number of K-fold cross-validation folds (patient-level)")
+    parser.add_argument('--cv_scheme', type=str, default='kfold', choices=['kfold', 'lopo', 'mccv'],
+                        help="kfold: patient-level StratifiedGroupKFold | lopo: leave-one-patient-out | mccv: Monte-Carlo CV (양성 포함 제약)")
+    parser.add_argument('--n_splits', type=int, default=20, help="Number of Monte-Carlo CV splits (cv_scheme=mccv)")
+    parser.add_argument('--test_size', type=int, default=8, help="Validation patients per Monte-Carlo split (cv_scheme=mccv)")
+    parser.add_argument('--n_folds', type=int, default=5, help="Number of K-fold cross-validation folds (patient-level, cv_scheme=kfold only)")
+    parser.add_argument('--max_folds', type=int, default=None, help="Run only the first N folds (timing/debug)")
+    parser.add_argument('--save_model', type=str2bool, default=True, help="Save per-fold checkpoints (~382MB each; disable for LOPO)")
+    parser.add_argument('--dbg_load_all', type=str2bool, default=False, help="Debug: load all modalities in the dataset regardless of active_modality")
+    parser.add_argument('--dsr_gpu_cache', type=str2bool, default=True, help="VFS 임베딩 전체(2.4GB)를 GPU에 상주시켜 배치별 전송 제거")
+    parser.add_argument('--pos_weight_mode', type=str, default='fold', choices=['fold', 'global'],
+                        help="fold: fold별 학습셋에서 계산(정상) | global: 전체 데이터 기준 고정값(기존 동작, 재현용)")
     parser.add_argument('--epochs', type=int, default=3)
     parser.add_argument('--batch_size', type=int, default=64)
     parser.add_argument('--learning_rate', type=float, default=3e-5)
